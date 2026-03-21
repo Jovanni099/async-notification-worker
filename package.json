@@ -1,13 +1,12 @@
 {
   "name": "async-notification-worker",
   "version": "1.0.0",
-  "description": "",
+  "description": "Background job processing service with queue workers and retries",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"No tests yet\""
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "license": "ISC"
 }
