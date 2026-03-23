@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { prisma } from './lib/prisma';
+import { notificationQueue } from './queues/notificationQueue';
 
 const app = express();
 
@@ -13,6 +14,8 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 app.post('/jobs', async (req: Request, res: Response) => {
+  let createdJobId: string | null = null;
+
   try {
     const { type, payload, scheduledAt } = req.body;
 
@@ -23,20 +26,59 @@ app.post('/jobs', async (req: Request, res: Response) => {
       });
     }
 
+    const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
+    const delay =
+      scheduledDate && scheduledDate.getTime() > Date.now()
+        ? scheduledDate.getTime() - Date.now()
+        : 0;
+
     const job = await prisma.job.create({
       data: {
         type,
         payload,
-        scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
+        scheduledAt: scheduledDate,
+      },
+    });
+
+    createdJobId = job.id;
+
+    await notificationQueue.add(
+      type,
+      {
+        dbJobId: job.id,
+        type,
+        payload,
+      },
+      {
+        jobId: job.id,
+        delay,
+      },
+    );
+
+    const queuedJob = await prisma.job.update({
+      where: { id: job.id },
+      data: {
+        status: 'queued',
       },
     });
 
     return res.status(201).json({
       success: true,
-      data: job,
+      data: queuedJob,
     });
   } catch (error) {
     console.error('Failed to create job:', error);
+
+    if (createdJobId) {
+      await prisma.job.update({
+        where: { id: createdJobId },
+        data: {
+          status: 'failed',
+          errorMessage:
+            error instanceof Error ? error.message : 'Failed to enqueue job',
+        },
+      });
+    }
 
     return res.status(500).json({
       success: false,
@@ -45,7 +87,7 @@ app.post('/jobs', async (req: Request, res: Response) => {
   }
 });
 
-app.get('/jobs/:id', async (req: Request, res: Response) => {
+app.get('/jobs/:id', async (req: Request<{ id: string }>, res: Response) => {
   try {
     const { id } = req.params;
 
