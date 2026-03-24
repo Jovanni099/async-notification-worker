@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { prisma } from './lib/prisma';
 import { notificationQueue } from './queues/notificationQueue';
 import { isValidJobType } from './constants/jobTypes';
+import { createJobAndEnqueue } from './services/jobService';
 
 const app = express();
 
@@ -15,84 +16,19 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 app.post('/jobs', async (req: Request, res: Response) => {
-  let createdJobId: string | null = null;
+  const result = await createJobAndEnqueue(req.body);
 
-  try {
-    const { type, payload, scheduledAt } = req.body;
-
-    if (!type || !payload) {
-      return res.status(400).json({
-        success: false,
-        message: 'type and payload are required',
-      });
-    }
-
-       if (!isValidJobType(type)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid job type',
-      });
-    }
-
-    const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
-    const delay =
-      scheduledDate && scheduledDate.getTime() > Date.now()
-        ? scheduledDate.getTime() - Date.now()
-        : 0;
-
-    const job = await prisma.job.create({
-      data: {
-        type,
-        payload,
-        scheduledAt: scheduledDate,
-      },
-    });
-
-    createdJobId = job.id;
-
-    await notificationQueue.add(
-      type,
-      {
-        dbJobId: job.id,
-        type,
-        payload,
-      },
-      {
-        jobId: job.id,
-        delay,
-      },
-    );
-
-    const queuedJob = await prisma.job.update({
-      where: { id: job.id },
-      data: {
-        status: 'queued',
-      },
-    });
-
-    return res.status(201).json({
-      success: true,
-      data: queuedJob,
-    });
-  } catch (error) {
-    console.error('Failed to create job:', error);
-
-    if (createdJobId) {
-      await prisma.job.update({
-        where: { id: createdJobId },
-        data: {
-          status: 'failed',
-          errorMessage:
-            error instanceof Error ? error.message : 'Failed to enqueue job',
-        },
-      });
-    }
-
-    return res.status(500).json({
+  if (!result.success) {
+    return res.status(result.statusCode).json({
       success: false,
-      message: 'Internal server error',
+      message: result.message,
     });
   }
+
+  return res.status(201).json({
+    success: true,
+    data: result.data,
+  });
 });
 
 app.post('/jobs/:id/retry', async (req: Request<{ id: string }>, res: Response) => {
