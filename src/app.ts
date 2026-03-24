@@ -95,6 +95,82 @@ app.post('/jobs', async (req: Request, res: Response) => {
   }
 });
 
+app.post('/jobs/:id/retry', async (req: Request<{ id: string }>, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const dbJob = await prisma.job.findUnique({
+      where: { id },
+    });
+
+    if (!dbJob) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found',
+      });
+    }
+
+    if (dbJob.status === 'processing') {
+      return res.status(409).json({
+        success: false,
+        message: 'Job is currently processing',
+      });
+    }
+
+    if (!isValidJobType(dbJob.type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Stored job type is invalid',
+      });
+    }
+
+    const queueJob = await notificationQueue.getJob(id);
+
+    if (queueJob) {
+      await queueJob.retry();
+    } else {
+      const payload =
+        typeof dbJob.payload === 'object' &&
+        dbJob.payload !== null &&
+        !Array.isArray(dbJob.payload)
+          ? (dbJob.payload as Record<string, unknown>)
+          : { value: dbJob.payload };
+
+      await notificationQueue.add(
+        dbJob.type,
+        {
+          dbJobId: dbJob.id,
+          type: dbJob.type,
+          payload,
+        },
+        {
+          jobId: `${dbJob.id}-manual-retry-${Date.now()}`,
+        },
+      );
+    }
+
+    const updatedJob = await prisma.job.update({
+      where: { id },
+      data: {
+        status: 'queued',
+        errorMessage: null,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: updatedJob,
+    });
+  } catch (error) {
+    console.error('Failed to retry job:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+    });
+  }
+});
+
 app.get('/jobs/:id', async (req: Request<{ id: string }>, res: Response) => {
   try {
     const { id } = req.params;
