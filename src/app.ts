@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { prisma } from './lib/prisma';
 import { notificationQueue } from './queues/notificationQueue';
+import { isValidJobType } from './constants/jobTypes';
 
 const app = express();
 
@@ -23,6 +24,13 @@ app.post('/jobs', async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: 'type and payload are required',
+      });
+    }
+
+       if (!isValidJobType(type)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid job type',
       });
     }
 
